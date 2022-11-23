@@ -1,0 +1,63 @@
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+.gradle
+/build
+/lib/liquibase-4.4.2/**
+/build_scripts/.gradle
+/src/main/nodejs/test/report
+yarn.lock
+# compiled output
+/dist
+/tmp
+/out-tsc
+
+# Dependency directories
+node_modules/
+**/.history/**
+# Serverless generated cloudformation template files
+.serverless/
+
+# profiling files
+chrome-profiler-events.json
+speed-measure-plugin.json
+
+# IDEs and editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+rewaatech-mims.iml
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
+.DS_Store
+Thumbs.db
+
+\.vscode/
+
+# ignore user-home-local except README.md
+/build_scripts/user-home-local/*
+!/build_scripts/user-home-local/README.md
+
+*.log
+
+#ignore cognito local folder
+.local/.cognito/db

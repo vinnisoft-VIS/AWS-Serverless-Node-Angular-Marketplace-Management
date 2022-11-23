@@ -1,0 +1,59 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: 'defining all kinesis streams used in platform'
+
+Resources:
+
+  OrdersStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: orders
+      ShardCount: 1
+
+  OrderNotificationsStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: order-notifications
+      ShardCount: 1
+
+  StockNotificationsStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: stock-notifications
+      ShardCount: 1
+
+  InvoicesStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: invoices
+      ShardCount: 1
+
+Outputs:
+
+  OrdersStream:
+    Description: A reference to orders kinesis stream
+    Value:
+      Fn::GetAtt: [ OrdersStream, Arn ]
+    Export:
+      Name: Orders
+
+  OrderNotificationsStream:
+    Description: A reference to order notifications kinesis stream
+    Value:
+      Fn::GetAtt: [ OrderNotificationsStream, Arn ]
+    Export:
+      Name: OrderNotifications
+
+  StockNotificationsStream:
+    Description: A reference to stock change notifications kinesis stream
+    Value:
+      Fn::GetAtt: [ StockNotificationsStream, Arn ]
+    Export:
+      Name: StockNotifications
+
+  InvoicesStream:
+    Description: A reference to inventory change notifications kinesis stream
+    Value:
+      Fn::GetAtt: [ InvoicesStream, Arn ]
+    Export:
+      Name: Invoices

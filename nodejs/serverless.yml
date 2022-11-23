@@ -1,0 +1,3115 @@
+service: mims-service-backend
+
+custom:
+  secrets: ${file(config/secrets.json)}
+  prune:
+    automatic: true
+    includeLayers: true
+    number: 5
+  customDomain:
+    domainName: ${self:custom.secrets.DOMAIN_API}
+    stage: "${self:custom.secrets.ENV}"
+    createRoute53Record: true
+  serverless-offline-kinesis:
+    endpoint: ${self:custom.secrets.KINESIS_ENDPOINT}
+    skipCacheInvalidation: false
+  splitStacks:
+    perFunction: true
+    perType: false
+    perGroupFunction: false
+  warmup:
+    enabled: true
+    package:
+      individually: false
+  dynamodb:
+    stages:
+      - local
+    start:
+      dbPath: ../../build
+  serverless-layers:
+    dependenciesPath: ./package.json
+    layersDeploymentBucket: "${self:custom.secrets.ENV}.mims.deploymentlayer"
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  region: ${self:custom.secrets.AWS_REGION}
+  timeout: 30
+  memorySize: 3072
+  stage: ${self:custom.secrets.ENV}
+  # profile: ${self:custom.secrets.ENV}
+  tracing:
+    apiGateway: true
+    lambda: true
+  environment:
+    NODE_ENV: ${self:custom.secrets.ENV}
+    API_DOMAIN_NAME: ${self:custom.customDomain.domainName}
+    SERVICE_NAME: ${self:service}
+    S3_BUCKET_NAME: ${self:custom.secrets.S3_BUCKET_NAME}
+    S3_INVENTORY_IMAGES_SUB_NAME: ${self:custom.secrets.S3_INVENTORY_IMAGES_SUB_NAME}
+    S3_INVENTORY_PRODUCTS_EXPORT_SUB_NAME: ${self:custom.secrets.S3_INVENTORY_PRODUCTS_EXPORT_SUB_NAME}
+    KINESIS_ENDPOINT: ${self:custom.secrets.KINESIS_ENDPOINT}
+    S3_OFFLINE_BUCKET: ${self:custom.secrets.S3_OFFLINE_BUCKET}
+  vpc: ${file(config/vpc-defintion.yml):customVpc}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - rds:*
+        - lambda:*
+        - s3:*
+        - kinesis:*
+        - dynamodb:*
+        - cognito-idp:*
+        - cloudfront:ListDistributions
+        - cloudfront:CreateInvalidation
+        - xray:*
+        - sns:*
+        - ses:*
+        - logs:*
+        - codepipeline:*
+      Resource: "*"
+
+package:
+  exclude:
+    - node_modules/**
+    - .dynamodb/**
+
+functions:
+  keepAuroraAlive:
+    handler: utils/cron/aurora_alive_cron.keepAuroraAlive
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(719 minutes) #every 23 hours and 58 minutes 1438
+  connectionHandler:
+    handler: web-socket/web_socket_handler.handler
+    warmup:
+      enabled: false
+    timeout: 900
+    events:
+      - websocket:
+          route: $connect
+          authorizer:
+            name: authWebsocket
+            identitySource:
+            - "route.request.querystring.Authorization"
+      - websocket:
+          route: $disconnect
+      - websocket:
+          route: productsExport
+      - websocket:
+          route: invoicesExport
+      - websocket:
+          route: productsUpdateExport
+      - websocket:
+          route: stockInvoicesExport 
+  authWebsocket:
+    handler: web-socket/ws_auth.auth
+    warmup:
+      enabled: false
+  products:
+    handler: lambda_registrar.handler
+    package:
+      include:
+        - node_modules/woocommerce-api/**
+        - node_modules/json-2-csv/**
+    events:
+      - http:
+          path: /products
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /products
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /products
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /categories
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /categories
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /categories/{id}/variants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /categories/{id}/products
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /categories/{id}/children
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /products/{productId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /products/{productId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/pack
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/pack/{packId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/pack/{packId}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/import/templates
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/import/progress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/import/cancel
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/export
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/import
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/bulk-update
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/bulk-update/progress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/bulk-update/accept
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/images
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/images
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/images/all
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/references
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/category
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /ecards/{ecardId}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /ecards
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/track/{trackType}/export
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/track/{trackType}/import/templates
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/track/{trackType}/import
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  onCognitoSignup:
+    handler: merchant/merchant_handler.onCognitoSignup
+    warmup:
+      enabled: false
+
+  onPreCognitoSignup:
+    handler: merchant/merchant_handler.onPreCognitoSignup
+    warmup:
+      enabled: false
+
+  activateMerchants:
+    handler: merchant/merchant_handler.activateMerchants
+    timeout: 300
+    warmup:
+      enabled: false
+
+  variants:
+    handler: lambda_registrar.handler
+    package:
+      include:
+        - node_modules/woocommerce-api/**
+        - node_modules/json-2-csv/**
+    events:
+      - http:
+          path: /variants
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/get-active-sku-count
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variant/{variantId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/nextSKUCode
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/variant
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/variant/{sku}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variants/{variantId}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variants/{variantId}/unpublish
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variants/{variantId}/publish
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/{variantId}/images
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/images
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/{variantId}/images
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}/variants
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/stock-locations
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/search
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variant-track
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/packages/{packageVariantId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /add-variants
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/scanner/{scannerCode}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /variants/{variantId}/packages
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /packages/{packageId}/variant
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  lookups:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /suppliers
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /suppliers
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /suppliers/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /brands
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /brands
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /lookups/countries
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/copyingStocksProgress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/active
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/{locationId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/action/{locationId}/pos/{action}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/code/{code}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /all-location-stocks
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /suppliers/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /suppliers/payments/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /suppliers/{id}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /stock-location/{locationId}/pos/registers
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  apps:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /apps
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /subscribed-apps
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions-pos/external-locations/{locationType}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/locations-reference/{appId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /subscribed-apps
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/app-subscription-details/{appChannelId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}/subscriptions/{subscribtionId}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}/product-listing
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}/product-listing/count
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}/product-listing/variant/{externalId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/{subscriptionId}/product-listing/variant
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}/product-listing/external/variant
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /apps/{appId}/product-listing/{productVariantStatusId}
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}/product-listing/{productVariantStatusId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/{appId}/error-logs
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/{productId}/variants/apps
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /apps/subscriptions/validate
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  woocommerceHooks:
+    handler: integration/apps/woocommerce/woocommerce_handler.handler
+    events:
+      - http:
+          path: /woocommerce
+          method: post
+          cors: true
+      - http:
+          path: /{userId}/webhooks
+          method: post
+          cors: true
+          # It needs a custom authorizer
+
+  wooCommerceOutboundOrderUpdates:
+    handler: integration/apps/woocommerce/kinesis/orderNotifications_stream_processor.notifyOrderUpdates
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: order-notifications
+          arn:
+            Fn::ImportValue: 'OrderNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  wooCommerceOutboundStockUpdates:
+    handler: integration/apps/woocommerce/kinesis/stockNotifications_stream_processor.notifyStockChanges
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: stock-notifications
+          arn:
+            Fn::ImportValue: 'StockNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  sallaOutboundStockUpdates:
+    handler: integration/apps/salla/kinesis/stockNotifications_stream_processor.notifyStockChanges
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: stock-notifications
+          arn:
+            Fn::ImportValue: 'StockNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  sallaOutboundOrderUpdates:
+    handler: integration/apps/salla/kinesis/orderNotifications_stream_processor.notifyOrderUpdates
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: order-notifications
+          arn:
+            Fn::ImportValue: 'OrderNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  onInstallAppAction:
+    handler: lambda_registrar.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  installAppActions:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /installation/import
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /installation/importLater
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /installation/cancel
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /installation/totalProductsToImport
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /installation/importedProductsCount
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /installation/progress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  merchants:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /merchants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  logAccountDisabled:
+   handler: merchant/merchant_handler.logAccountDisabled
+   events:
+      - http:
+          path: /merchants/log_account_disabled
+          method: post
+          cors: true
+
+  merchantsSchemaName:
+    handler: merchant/merchant_handler.getNextSchemaName
+    events:
+      - http:
+          path: /merchants/schemaName/{companyName}
+          method: get
+          cors: true
+
+  merchantUnbounce:
+    handler: merchant/merchant_handler.addUnbounceMerchant
+    events:
+      - http:
+          path: /merchants/webhook/create
+          method: post
+          cors: true
+
+  onMerchantActivate:
+    handler: merchant/merchant_handler.onActivateUser
+    events:
+      - http:
+          path: /merchants/activate
+          method: post
+          cors: true
+
+  companyNameValidator:
+    handler: merchant/merchant_handler.checkIfCompanyNameIsTaken
+    events:
+      - http:
+          path: /merchants/{companyName}
+          method: get
+          cors: true
+
+  replenishSpareMerchantsCron:
+    handler: merchant/cron/spare_merchants.replenish
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: cron(0 */6 * * ? *)
+
+  user-settings:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: settings/users
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /settings/users/ui-policies
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/users/{userId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: users/user-name/{userId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/users
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/overview
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/overview
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/roles/{type}/permissions
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: settings/users/{userId}/locations
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  user-authenticate:
+    handler: merchant/merchant_handler.authenticate
+    events:
+      - http:
+          path: authenticate
+          method: post
+          cors: true
+  pos-settings:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/settings
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/settings
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  pos-register:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/registers
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/activate
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/book-selling-session
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/deactivate
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/makeDefault
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/open
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/close
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/cash
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/sell
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/park
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/park/{invoiceId}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/parkedInvoices
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/return
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/auth
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/cash-management/export
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/cash-management
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/registers/{id}/balance
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  pos-invoice:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/invoices/return/{saleInvoiceId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/invoices/{invoiceId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/invoices/{invoiceId}/park
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/invoices/lastInvoiceNumber/{type}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  pos-location:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/locations
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /pos/locations/{id}/variants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/locations/products-without-price
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/locations/{id}/scanner/{code}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  pos-payment-processors:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/paymentProcessor/failedPayment/{processor}
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  pos-layouts:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /pos/layouts
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/layouts/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/layouts/{id}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/layouts
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /pos/layouts/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  utilities:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /requestImageUploadURL
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /files
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /files
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /files
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  publish:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /products/publish
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /products/unPublish
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  orders:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /orders
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/error-count
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/{orderId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/invoices
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/invoices/{orderInvoiceId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/retry/{orderId}
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/errors/{orderErrorId}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/status
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/issueInvoice
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/returnInvoice/{orderId}
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/settings
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/settings
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /get-order-invoice-channels
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  customersAccountSubscription:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: account-subscription/estimate
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/estimate-renewal-subscription
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/get-tap-renewal-url
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/charge-future-renewal-subscription
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/build-tap-charge-url
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/send-tap-invoice
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/subscribe
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/send-renewal-invoice
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  rewaaSubscriptionPlans:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: rewaa-subscription/plans
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  chargeBeeHooks:
+    handler: rewaa-account-subscription/chargeBee/webhooks/webhooks_handler.handle
+    events:
+      - http:
+          path: /webhooks/chargeBee/subscription
+          method: post
+          cors: true
+
+  tapHooks:
+    handler: payment-gateway-integration/tap/webhooks/webhooks_handler.handle
+    events:
+      - http:
+          path: /webhooks/tap/confirm-payment/{id}
+          method: post
+          cors: true
+      - http:
+          path: /webhooks/tap/cards
+          method: post
+          cors: true
+
+  accountSubscription:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: account-subscription/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  plansAccountSubscription:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: account-subscription/plans
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  sendBankTransactionToChatbot:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: rewaa-subscription/sendBankTransaction
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: rewaa-subscription/startIntercomChat
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+                      
+  invoicesAccountSubscription:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: account-subscription/invoices/{subscriptionId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/unpaid-invoice
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/cancel-unpaid
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: account-subscription/invoice/{invoiceId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  coupon:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: account-subscription/coupons/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  inboundOrderProcessor:
+    handler: integration/kinesis/orders_stream_processor.processOrder
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: orders
+          arn:
+            Fn::ImportValue: 'Orders'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  pointOfSaleHooks:
+    handler: integration/apps/point-of-sale/webhooks/hook_api_registrar.handler
+    events:
+      - http:
+          path: /{userId}/stocks
+          method: post
+          cors: true
+      - http:
+          path: /{userId}/orders/{id}
+          method: put
+          cors: true
+      - http:
+          path: /{userId}/products
+          method: delete
+          cors: true
+      - http:
+          path: /{userId}/invoices
+          method: post
+          cors: true
+      - http:
+          path: /{userId}/payment
+          method: post
+          cors: true
+  magentoHooks:
+    handler: integration/apps/magento/magento_handler.handle
+    events:
+      - http:
+          path: /webhooks/magento/{userId}/products
+          method: put
+          cors: true
+      - http:
+          path: /webhooks/magento/{userId}/products
+          method: post
+          cors: true
+      - http:
+          path: /webhooks/magento/{userId}/orders
+          method: post
+          cors: true
+
+  zidHooks:
+    handler: integration/apps/zid/webhooks/webhooks_handler.handle
+    events:
+      - http:
+          path: /webhooks/zid/{userId}/products
+          method: post
+          cors: true
+      - http:
+          path: /webhooks/zid/{userId}/products
+          method: put
+          cors: true
+      - http:
+          path: /webhooks/zid/{userId}/products
+          method: delete
+          cors: true
+      - http:
+          path: /webhooks/zid/{userId}/orders
+          method: post
+          cors: true
+
+  sallaHooks:
+    handler: integration/apps/salla/webhooks/webhooks_handler.handle
+    events:
+      - http:
+          path: /webhooks/salla/{userId}/products
+          method: post
+          cors: true
+      - http:
+          path: /webhooks/salla/{userId}/orders
+          method: post
+          cors: true
+      - http:
+          path: /webhooks/salla/{userId}/orders
+          method: put
+          cors: true
+
+  pointOfSaleImport:
+    handler: integration/apps/point-of-sale/handlers/product_import_handler.importOrSkuMatchProducts
+    warmup:
+      enabled: false
+  appImportMatch:
+    handler: integration/product_import_handler.importOrSkuMatchProducts
+    timeout: 900
+
+  zidExceedLimitImport:
+    handler: integration/apps/zid/install/catalog_loading.exceedLimitImport
+    timeout: 900
+    warmup:
+      enabled: false
+#  syncClientsLinkedProductsForPOS:
+#    handler: operations/linked_products_handler.syncAllClientsLinkedProductsForPOS
+#    timeout: 900
+#    warmup:
+#      enabled: false
+#  syncOneClientLinkedProductsForPOS:
+#    handler: operations/linked_products_handler.syncOneClientLinkedProductsForPOS
+#    timeout: 900
+#    warmup:
+#      enabled: false
+
+  posOutboundOrderUpdates:
+    handler: integration/apps/point-of-sale/kinesis/orderNotifications_stream_processor.notifyOrderUpdates
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: order-notifications
+          arn:
+            Fn::ImportValue: 'OrderNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  posOutboundStockUpdates:
+    handler: integration/apps/point-of-sale/kinesis/stockNotifications_stream_processor.notifyStockChanges
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: stock-notifications
+          arn:
+            Fn::ImportValue: 'StockNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  #  woocommerceInventoryUpdates:
+  #    handler: integration/apps/woocommerce/kinesis/inventoryChanges_stream_processor.processInventoryChanges
+  #    events:
+  #      - stream:
+  #          type: kinesis
+  #          streamName: inventory-notifications
+  #          arn:
+  #            Fn::ImportValue: 'InventoryNotifications'
+  #          startingPosition: LATEST
+  #          batchSize: 10
+  #    warmup:
+  #      enabled: false
+
+
+  magentoOutboundOrderUpdates:
+    handler: integration/apps/magento/kinesis/orderNotifications_stream_processor.notifyOrderUpdates
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: order-notifications
+          arn:
+            Fn::ImportValue: 'OrderNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+  magentoOutboundStockUpdates:
+    handler: integration/apps/magento/kinesis/stockNotifications_stream_processor.notifyStockChanges
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: stock-notifications
+          arn:
+            Fn::ImportValue: 'StockNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  zidOutboundOrderUpdates:
+    handler: integration/apps/zid/kinesis/orderNotifications_stream_processor.notifyOrderUpdates
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: order-notifications
+          arn:
+            Fn::ImportValue: 'OrderNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  zidOutboundStockUpdates:
+    handler: integration/apps/zid/kinesis/stockNotifications_stream_processor.notifyStockChanges
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: stock-notifications
+          arn:
+            Fn::ImportValue: 'StockNotifications'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+
+  invoice:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /invoices
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/payable-invoices
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/export
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /orders/invoices/export
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-count/create
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-count/{invoiceId}
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/purchase-orders/create
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/purchase-orders/{InvoiceNumber}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoicesByType/{invoiceType}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/return-stocks/create
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/remove-stock/create
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /non-payable-invoices-by-type/{invoiceType}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/remove-stock-by-no/{InvoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-transfer/create
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-transfer/create-multiple
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-transfer
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-transfer/{invoiceId}
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/paymentlist
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+      - http:
+          path: /invoice/stock-transfer/accept/{invoiceId}
+          method: PUT
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoice/stock-transfer/reject/{invoiceId}
+          method: PUT
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/invoiceByInvoiceNumber/{InvoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/receive-debit/{invoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/customer-receive-debit/{invoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/pay-credit/{invoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/pay-purchase-order/{invoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/pay-return-stock/{invoiceNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /invoices/{invoiceNumber}/payments
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  payment:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /payments/pay-credit
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /payments/receive-debit
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /payments/receive-debit-from-customer
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /payments/last-number
+          method: GET
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  payment-method:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /payment-methods/add
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /payment-methods/list
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /payment-methods/{id}
+          method: PUT
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  customers:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /customers
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/export
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/nextCode
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/getByCode/{code}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/getById/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/getByMobile/{mobileNumber}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customer/unpaid-invoices/{customerId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/import/templates
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/import
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/import/progress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /customers/import/cancel
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  purchaseOrder:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /purchase-orders
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  weightedProductConfiguration:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /configurations/weighted-product
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /configurations/weighted-product
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  shippingConfiguration:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /configurations/shipping
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /configurations/shipping
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  quanityConfiguration:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /configurations/quantity
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /configurations/quantity
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  taxes:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /taxes
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes
+          method: POST
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes/code/{code}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes/configuration
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /taxes/configuration
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  preAuthentication:
+    handler: merchant/merchant_handler.preAuthentication
+    warmup:
+      enabled: false
+  postAuthentication:
+    handler: merchant/merchant_handler.postAuthentication
+    warmup:
+      enabled: false
+
+  subscriptionReminder:
+    handler: rewaa-account-subscription/chargeBee/cron/subscription.subscriptionReminder
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: cron(0 10 * * ? *)
+
+  subscriptionMissing:
+    handler: rewaa-account-subscription/chargeBee/cron/subscription.subscriptionMissing
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(1 day)
+
+  subscriptionUnpaid:
+    handler: rewaa-account-subscription/chargeBee/cron/subscription.subscriptionUnpaid
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(1 day)
+
+  deactivateObsSubscriptions:
+    handler: rewaa-account-subscription/chargeBee/cron/subscription.deactivateObsSubscriptions
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: cron(0 0 * * ? *)
+
+  collectUnpaidRenewInvoices:
+    handler: rewaa-account-subscription/chargeBee/cron/subscription.collectUnpaidRenewInvoices
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: cron(0 0 * * ? *)
+
+  updateZidClientsTokens:
+    handler: cron/update_tokens_for_zid_clients.updateTokens
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(14 days)
+  updateZidTokensForSegment:
+    handler: cron/update_tokens_for_zid_clients.updateTokensForSegment
+    timeout: 900
+    warmup:
+      enabled: false
+  updateSallaClientsTokens:
+    handler: cron/update_tokens_for_salla_clients.updateTokens
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(5 days)
+  updateSallaTokensForSegment:
+    handler: cron/update_tokens_for_salla_clients.updateTokensForClientSegment
+    timeout: 900
+    warmup:
+      enabled: false
+  deleteOldParkedSalesInvoices:
+    handler: internal_apps/pos/cron/delete_old_parked_sale_invoices.deleteOldParkedSalesInvoices
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(12 hours)
+
+  reports:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /dashboard
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /metabase-dashboard-url/{reportId}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /paymentMethods-report
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /inventory-value
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /reports
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /user-reports
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /reports/pin/{reportId}/{pinned}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  QoyodInvoiceNotfications:
+    handler: integration/apps/qoyod/kinesis/invoice_stream_processor.notifyInvoices
+    timeout: 900
+    events:
+      - stream:
+          type: kinesis
+          streamName: invoices
+          arn:
+            Fn::ImportValue: 'Invoices'
+          startingPosition: LATEST
+          batchSize: 10
+    warmup:
+      enabled: false
+  QoyodAccounts:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /qoyod/accounts
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /qoyod/locations
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /qoyod/sync
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  promotions:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /promotions
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/variants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/stock-locations
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/get_intersected_products_promotion
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/import/templates
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/import/progress
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/import/cancel
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /promotions/import
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  expense:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /expenses
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expenses/{id}
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expenses/create
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expenses/{id}
+          method: delete
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expense-categories
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expense-categories
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expense-categories/{id}/expenses
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expense-categories/{id}/children
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /expenses/{id}
+          method: put
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+  actionLogs:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /action-logs
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  githubListener:
+    handler: utils/cicd/github_listner_hook.handle
+    events:
+      - http:
+          path: /cicd/github/hook
+          method: post
+          cors: true
+
+  OldPOSMigration:
+    handler: migration/old-pos/migration_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  oldPosStoreMigration:
+    handler: migration/old-pos/migration_handler.storeHandler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  oldPosStoreMigrationAllResources:
+    handler: migration/old-pos/migration_handler.migrateAllResourcesForStore
+    timeout: 900
+    warmup:
+      enabled: false
+
+  QoyodSyncInvoices:
+    handler: integration/apps/qoyod/services/invoice_sync_service.sync
+    timeout: 900
+    warmup:
+      enabled: false
+
+  DynamoDb:
+    handler: history-log/nosql/dynamodb/dynamodb_handler.handler
+    timeout: 900
+
+  DynamoDbMigration:
+    handler: migration/migrate_dynamo_dbs.migrateDynamoDbs
+    timeout: 900
+    warmup:
+      enabled: false
+  cognitoUserPoolMigration:
+    handler: cognito_migration/cognito_migration_trigger.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  #start: dynamodb migration functions
+  listTablesItemCounts:
+    handler: migration/dynamodb/handlers/list_tables_item_counts_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  createSharedTables:
+    handler: migration/dynamodb/handlers/create_shared_tables_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  removeEmptyTables:
+    handler: migration/dynamodb/handlers/remove_empty_tables_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  enablePointInTime:
+    handler: migration/dynamodb/handlers/enable_point_in_time_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  exportTablesToS3:
+    handler: migration/dynamodb/handlers/export_tables_to_s3_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  migrateImportProductsTables:
+    handler: migration/dynamodb/handlers/migrate_import_products_tables_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  migrateProductsTables:
+    handler: migration/dynamodb/handlers/migrate_products_tables_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  removeMigratedTables:
+    handler: migration/dynamodb/handlers/remove_migrated_tables_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  preMigrateDynamoDB:
+    handler: migration/dynamodb/pre_migrate_dynamodb_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+  migrateDynamoDB:
+    handler: migration/dynamodb/migrate_dynamodb_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+  postMigrateDynamoDB:
+    handler: migration/dynamodb/post_migrate_dynamodb_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+  #end: dynamodb migration functions
+
+  migrateProductCostCentralize:
+    handler: migration/inventory/migrate_product_cost.migrateProductCostCentralize
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processImport:
+    handler: product/import-export/product_import_export_handler.import
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processBulkUpdate:
+    handler: product/import-export/product_import_export_handler.bulkUpdate
+    timeout: 900
+    warmup:
+      enabled: false
+
+  startBulkUpdateRowsValidation:
+    handler: product/import-export/bulk_update/bulk_update_handler.startRowsValidation
+    timeout: 900
+    warmup:
+      enabled: false
+
+  startBulkUpdate:
+    handler: product/import-export/bulk_update/bulk_update_handler.startBulkUpdate
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processImportProductTrack:
+    handler: product/import-export/product_import_export_handler.importTracks
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processImportCustomer:
+    handler: customers/import-export/customer_import_export_handler.import
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processCreatePromotion:
+    handler: internal_apps/promotions/promotions_handler.create
+    timeout: 900
+    warmup:
+      enabled: false
+
+  processImportPromotion:
+    handler: lambda_registrar.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  handleMerchantPOSDown:
+    handler: integration/apps/point-of-sale/handle_downtime_invoices.handleMerchant
+    timeout: 900
+    warmup:
+      enabled: false
+  handleMerchantsPOSDown:
+    handler: integration/apps/point-of-sale/handle_downtime_invoices.handleMerchants
+    timeout: 900
+    warmup:
+      enabled: false
+
+  errorAlarm:
+    handler: error_alarm/error_alarm_handler.handler
+    events:
+      - cloudwatchLog:
+          logGroup: '/aws/lambda/mims-service-backend-${self:custom.secrets.ENV}-errorAlarmTest'
+          filter: '?ERROR ?WARN ?5xx'
+      - cloudwatchLog:
+          logGroup: '/aws/lambda/mims-service-backend-${self:custom.secrets.ENV}-email'
+          filter: '?ERROR ?WARN ?5xx'
+      - cloudwatchLog:
+          logGroup: '/aws/lambda/mims-service-backend-${self:custom.secrets.ENV}-logAccountDisabled'
+          filter: '?ERROR ?WARN ?5xx'
+    timeout: 900
+    warmup:
+      enabled: false
+
+  errorAlarmTest:
+    handler: error_alarm/error_alarm_handler.handlerTest
+    timeout: 900
+    warmup:
+      enabled: false
+
+  email:
+    handler: email/email_handler.handler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateProductStocks:
+    handler: migration/product_cost_price.updateProductStockHandler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  copyProductsStocksFromLocation:
+    handler: stock-location/stock_location_handler.copyProductsStocksFromLocation
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateClientVariantStock:
+    handler: migration/product_cost_price.updateClientVariantStockHandler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateClientVariantPrices:
+    handler: migration/product_cost_price.updateProductPricesAsDefaultLocationHandler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  fixedPoTracksNo:
+    handler: fix/po_track_location.updatePoTracksLocationHandler
+    timeout: 900
+    warmup:
+      enabled: false
+
+  offlineData:
+    handler: lambda_registrar.handler
+    events:
+      - http:
+          path: /offline-data/variants
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /offline-data/sell-invoices
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /offline-data/customers
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: /offline-data/invoices
+          method: post
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+
+  offlineDataLogVariants:
+    handler: offline/offline_handler.logVariants
+    timeout: 900
+    warmup:
+      enabled: false
+
+  offlineDataLogCustomers:
+    handler: offline/offline_handler.logCustomers
+    timeout: 900
+    warmup:
+      enabled: false
+
+  syncOfflineInvoices:
+    handler: offline/offline_handler.syncOfflineInvoices
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(60 minutes)
+
+  syncClientOfflineInvoices:
+    handler: offline/offline_handler.syncClientOfflineInvoices
+    timeout: 900
+    warmup:
+      enabled: false
+
+  migrateToOfflineS3:
+    handler: offline/offline_handler.migrateToOfflineS3
+    timeout: 900
+    warmup:
+      enabled: false
+
+  migrateClientToOfflineS3:
+    handler: offline/offline_handler.migrateClientToOfflineS3
+    timeout: 900
+    warmup:
+      enabled: false
+
+  migrateClientToDynamodbOffline:
+    handler: offline/offline_handler.migrateClientToDynamodbOffline
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateOfflineS3:
+    handler: offline/offline_handler.updateOfflineS3
+    timeout: 900
+    warmup:
+      enabled: false
+    events:
+      - schedule:
+          rate: rate(24 hours)
+
+  addNewClientOfflineData:
+    handler: offline/offline_handler.addNewClientOfflineData
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateClientOfflineS3:
+    handler: offline/offline_handler.updateClientOfflineS3
+    timeout: 900
+    warmup:
+      enabled: false
+
+  updateOfflineClientList:
+    handler: offline/offline_handler.updateClientList
+    timeout: 900
+    warmup:
+      enabled: false
+
+  exportProducts:
+    handler: product/import-export/product_import_export_handler.exportAllProducts
+    timeout: 900
+    warmup:
+      enabled: false 
+
+  exportProductsUpdate:
+    handler: product/import-export/product_import_export_handler.generateUpdateProductsTemplate
+    timeout: 900
+    warmup:
+      enabled: false
+
+  exportInvoices:
+    handler: order/invoice/order_invoice_handler.generateInvoices
+    timeout: 900
+    warmup:
+      enabled: false
+
+  invalidateCloudFront:
+    handler: devOps/invalidate_cloudfront.invalidate
+    timeout: 900
+    warmup:
+      enabled: false
+
+  externalAPIs:
+    handler: external_lambda_registrar.handler
+    events:
+      - http:
+          path: external/orders/invoices
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: external/purchaseOrders
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization
+      - http:
+          path: external/returnStocks
+          method: get
+          cors: true
+          authorizer:
+            arn: ${self:custom.secrets.COGNITO_POOL_ARN}
+            identitySource: method.request.header.Authorization      
+  exportStockInvoices:
+    handler: invoice/invoice_handler.exportInvoiceWS
+    timeout: 900
+    warmup:
+      enabled: false  
+  removeOldPosApp:
+    handler: integration/apps/point-of-sale/remove-pos-handler.uninstallOldPosFromMerchants
+    timeout: 900
+    warmup:
+      enabled: false
+  removeMerchantOldPOS:
+    handler: integration/apps/point-of-sale/remove-pos-handler.uninstallOldPos
+    timeout: 900
+    warmup:
+      enabled: false   
+
+plugins:
+  - serverless-offline-lambda
+  - serverless-offline-kinesis
+  - serverless-dynamodb-local
+  - serverless-offline
+  - serverless-offline-scheduler
+  - serverless-domain-manager
+  - serverless-plugin-split-stacks
+  - serverless-prune-plugin
+  - serverless-plugin-warmup #https://serverless.com/blog/keep-your-lambdas-warm/
+  - serverless-layers
+
+resources:
+  Resources:
+    OnCognitoSignupPermission:
+      Type: 'AWS::Lambda::Permission'
+      Properties:
+        Action: "lambda:InvokeFunction"
+        FunctionName:
+          Fn::GetAtt: [ "OnCognitoSignupLambdaFunction", "Arn"]
+        Principal: "cognito-idp.amazonaws.com"
+        SourceArn:
+          Fn::Join: [ "", [ "arn:aws:cognito-idp", ":", Ref: "AWS::Region", ":", Ref: "AWS::AccountId", ":", "userpool/", "${self:custom.secrets.COGNITO_POOL_ID}" ] ]
+    GatewayResponseDefault4XX:
+      Type: 'AWS::ApiGateway::GatewayResponse'
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'OPTIONS,POST,GET,DELETE,PUT'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: 'ApiGatewayRestApi'

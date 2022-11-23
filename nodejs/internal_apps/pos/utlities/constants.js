@@ -1,0 +1,5 @@
+const SEVEN_DAYS_IN_MILLISECONDS = 7 * 24 * 60 * 60 * 1000;
+
+module.exports = {
+  SEVEN_DAYS_IN_MILLISECONDS
+};

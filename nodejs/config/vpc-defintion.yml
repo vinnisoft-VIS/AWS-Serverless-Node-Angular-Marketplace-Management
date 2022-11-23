@@ -1,0 +1,6 @@
+customVpc:
+  securityGroupIds:
+    - @lambda_security_group@
+  subnetIds:
+    - @private_subnet1@
+    - @private_subnet2@

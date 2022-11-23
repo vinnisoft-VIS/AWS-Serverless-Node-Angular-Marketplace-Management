@@ -1,0 +1,6 @@
+<router-outlet></router-outlet>
+<app-spinner *ngIf="spinnerService._loading$ | async"></app-spinner>
+<p-toast [style]="{top:'60px'}" position="{{lng =='en' ? 'top-right':'top-left'}}"></p-toast>
+
+
+
